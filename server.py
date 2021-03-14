@@ -1,4 +1,6 @@
 import socket
+import os
+import mimetypes
 
 SERVER = '127.0.0.1'
 PORT = 5050
@@ -56,27 +58,58 @@ class HTTPServer(TCPServer):
         301: 'Moved Permanently',
         400: 'Bad Request',
         404: 'Not Found',
+        501: 'Not Implemented',
         505: 'HTTP Version Not Supported'
 
     }
 
     def handle_request(self, data):
-        state_line = self.state_line(status_code=200)
-        headers = self.response_headers
+        # Create an instance of HTTPRequest
+        request = HTTPRequest(data)
 
-        # add a blank line to separate header from body
+        # Now, we call the appropriate function(handler) according to the given request
+        try:
+            handler = getattr(self, 'handle_%s' % request.method)
+
+        except(AttributeError):
+            handler = self.HTTP_501_handler
+
+        # Process the appropriate response, given the input request
+
+        response = handler(request)
+
+        return response
+
+    def handle_GET(self, request):
+        """
+        Handles the response for the get method
+        """
+        filename = request.url.strip('/')
+
+        if os.path.exists(filename):
+            state_line = self.state_line(status_code=200)
+            content_type = mimetypes.guess_type(filename)[0] or 'text/html'
+            extra_headers = {'Content-Type': content_type}
+            response_headers = self.response_headers(
+                extra_headers=extra_headers)
+            with open(filename, 'rb') as f:
+                response_body = f.read()
+
+        else:
+            state_line = self.state_line(status_code=404)
+            response_headers = self.response_headers()
+            response_body = b'<h1>404: Not Found</h1>'
+
+        blank_line = b'\r\n'
+        return b''.join([state_line, response_headers, blank_line, response_body])
+
+    def HTTP_501_handler(self, request):
+        state_line = self.state_line(status_code=501)
+        response_headers = self.response_headers()
         blank_line = b'\r\n'
 
-        response_body = b"""<html>
-        <body>
-        <h1>
-        Request Received!
-        </h1>
-        </html>
-        
-        """
-
-        return b"".join([state_line, headers, blank_line, response_body])
+        response_body = b'<h1>501 Not Implemented</h1>'
+        return b"".join([state_line, response_headers, blank_line, response_body])
 
     def state_line(self, status_code):
         """Returns response line"""
@@ -101,6 +134,31 @@ class HTTPServer(TCPServer):
             headers += "%s: %s\r\n" % (h, headers_copy[h])
 
         return headers.encode()  # call encode to convert str to bytes
+
+
+class HTTPRequest:
+    def __init__(self, data):
+        self.method = None
+        self.url = None
+        self.http_version = "1.1"  # Default version
+        self.parse(data)
+
+    def parse(self, data):
+        # get all the lines of the request
+        lines = data.split(b"\r\n")
+
+        # first line of a HTTP request is the request line, containing the method, the url and the http version
+        request_line = lines[0]
+
+        request_fields = request_line.split(b" ")
+
+        self.method = request_fields[0].decode()  # decode from bytes to string
+
+        if len(request_fields) > 1:
+            self.url = request_fields[1].decode()
+
+        if len(request_fields) > 2:
+            self.http_version = request_fields[2].decode()
 
 
 if __name__ == "__main__":
